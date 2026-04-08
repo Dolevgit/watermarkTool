@@ -8,6 +8,7 @@ import traceback
 import faulthandler
 from pathlib import Path
 import tkinter as tk
+import webbrowser
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
 from PIL import Image, ImageOps, ImageTk
@@ -17,11 +18,14 @@ from tkinterdnd2 import COPY, DND_FILES, TkinterDnD
 
 
 APP_TITLE = "Watermark Tool"
+APP_VERSION = "1.1"
+AUTHOR_GITHUB_URL = "https://github.com/Dolevgit"
+PROJECT_GITHUB_URL = "https://github.com/Dolevgit/watermarkTool"
 DEFAULT_SETTINGS = {
-    "text": "",
+    "text": "Build with Codex",
     "font_size": 36,
     "angle": 45,
-    "color": "#ffffff",
+    "color": "#000000",
     "opacity": 0.3,
     "repeat": True,
     "space_left": 0,
@@ -310,7 +314,15 @@ class WatermarkApp:
         footer.pack(fill="x", side="bottom")
         footer.columnconfigure(0, weight=1)
         ttk.Label(footer, textvariable=self.status_var).grid(row=0, column=0, sticky="w")
-        ttk.Label(footer, text="Built with Codex").grid(row=0, column=1, sticky="e")
+        footer_links = ttk.Frame(footer)
+        footer_links.grid(row=0, column=1, sticky="e")
+        self.add_footer_text(footer_links, "Built with Codex", 0)
+        self.add_footer_text(footer_links, " | ", 1)
+        self.add_footer_link(footer_links, "@Dolevgit", AUTHOR_GITHUB_URL, 2)
+        self.add_footer_text(footer_links, " | ", 3)
+        self.add_footer_link(footer_links, "Project on GitHub", PROJECT_GITHUB_URL, 4)
+        self.add_footer_text(footer_links, " | ", 5)
+        self.add_footer_text(footer_links, f"version {APP_VERSION}", 6)
 
     def attach_traces(self) -> None:
         for variable in (
@@ -388,6 +400,14 @@ class WatermarkApp:
     def update_color_button(self) -> None:
         color = self.color_var.get()
         self.color_button.configure(bg=color, activebackground=color, fg=self.pick_button_text_color(color))
+
+    def add_footer_text(self, parent: ttk.Frame, text: str, column: int) -> None:
+        ttk.Label(parent, text=text).grid(row=0, column=column, sticky="e")
+
+    def add_footer_link(self, parent: ttk.Frame, text: str, url: str, column: int) -> None:
+        link = tk.Label(parent, text=text, fg="#0563c1", cursor="hand2")
+        link.grid(row=0, column=column, sticky="e")
+        link.bind("<Button-1>", lambda _event: webbrowser.open_new(url))
 
     def pick_button_text_color(self, color: str) -> str:
         color = color.lstrip("#")

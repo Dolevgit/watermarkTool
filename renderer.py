@@ -5,6 +5,21 @@ from pathlib import Path
 
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 
+try:
+    from bidi.algorithm import get_display
+except ImportError:
+    get_display = None
+
+
+RTL_RANGES = (
+    (0x0590, 0x05FF),  # Hebrew
+    (0x0600, 0x06FF),  # Arabic
+    (0x0750, 0x077F),  # Arabic Supplement
+    (0x08A0, 0x08FF),  # Arabic Extended-A
+    (0xFB1D, 0xFDFF),  # Hebrew/Arabic presentation forms
+    (0xFE70, 0xFEFF),  # Arabic presentation forms-B
+)
+
 
 def _load_font(size: int) -> ImageFont.ImageFont:
     candidates = [
@@ -25,11 +40,30 @@ def _load_font(size: int) -> ImageFont.ImageFont:
     return ImageFont.load_default(size=size)
 
 
+def _contains_rtl(text: str) -> bool:
+    for char in text:
+        codepoint = ord(char)
+        if any(start <= codepoint <= end for start, end in RTL_RANGES):
+            return True
+    return False
+
+
+def _prepare_text_for_rendering(text: str) -> str:
+    if not _contains_rtl(text):
+        return text
+
+    if get_display is None:
+        return "\n".join(line[::-1] for line in text.splitlines())
+
+    return "\n".join(get_display(line, base_dir="R") for line in text.splitlines())
+
+
 def render_watermark(image: Image.Image, settings: dict) -> Image.Image:
     base = image.convert("RGBA")
     text = (settings.get("text") or "").strip()
     if not text:
         return base
+    text = _prepare_text_for_rendering(text)
 
     font_size = max(8, int(settings.get("font_size", 36)))
     angle = float(settings.get("angle", 45))

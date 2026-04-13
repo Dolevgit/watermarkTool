@@ -24,6 +24,8 @@ PROJECT_GITHUB_URL = "https://github.com/Dolevgit/watermarkToolDesktop"
 DEFAULT_WINDOW_GEOMETRY = "1120x740"
 MIN_WINDOW_WIDTH = 600
 MIN_WINDOW_HEIGHT = 390
+SIDE_PANEL_MIN_WIDTH = 50
+SIDE_PANEL_MAX_WIDTH = 250
 DEFAULT_SETTINGS = {
     "text": "Build with Codex",
     "font_size": 36,
@@ -170,6 +172,9 @@ class WatermarkApp:
         self.current_image_path: Path | None = None
         self.preview_photo: ImageTk.PhotoImage | None = None
         self.render_after_id: str | None = None
+        self.container: ttk.Frame | None = None
+        self.preview_panel: ttk.Frame | None = None
+        self.controls_panel: ttk.Frame | None = None
 
         self.font_size_var = tk.IntVar(value=self.settings["font_size"])
         self.angle_var = tk.IntVar(value=self.settings["angle"])
@@ -213,26 +218,27 @@ class WatermarkApp:
                 logging.exception("Failed to load window icon image: %s", icon_path)
 
     def build_ui(self) -> None:
-        container = ttk.Frame(self.root, padding=14)
-        container.pack(fill="both", expand=True)
+        self.container = ttk.Frame(self.root, padding=14)
+        self.container.pack(fill="both", expand=True)
 
-        container.columnconfigure(0, weight=1)
-        container.columnconfigure(1, weight=2)
-        container.rowconfigure(0, weight=1)
+        self.container.columnconfigure(0, weight=1)
+        self.container.columnconfigure(1, weight=0, minsize=SIDE_PANEL_MIN_WIDTH)
+        self.container.rowconfigure(0, weight=1)
 
-        preview_panel = ttk.Frame(container, padding=(0, 0, 14, 0))
-        preview_panel.grid(row=0, column=0, sticky="nsew")
-        preview_panel.rowconfigure(1, weight=1)
-        preview_panel.columnconfigure(0, weight=1)
+        self.preview_panel = ttk.Frame(self.container, padding=(0, 0, 14, 0))
+        self.preview_panel.grid(row=0, column=0, sticky="nsew")
+        self.preview_panel.rowconfigure(1, weight=1)
+        self.preview_panel.columnconfigure(0, weight=1)
 
-        controls_panel = ttk.Frame(container, padding=18)
-        controls_panel.grid(row=0, column=1, sticky="nsew")
-        controls_panel.columnconfigure(0, weight=1)
+        self.controls_panel = ttk.Frame(self.container, padding=18)
+        self.controls_panel.grid(row=0, column=1, sticky="nsew")
+        self.controls_panel.grid_propagate(False)
+        self.controls_panel.columnconfigure(0, weight=1, minsize=20)
 
-        ttk.Label(preview_panel, textvariable=self.file_var).grid(row=0, column=0, sticky="w", pady=(0, 8))
+        ttk.Label(self.preview_panel, textvariable=self.file_var).grid(row=0, column=0, sticky="w", pady=(0, 8))
 
         self.preview_label = ttk.Label(
-            preview_panel,
+            self.preview_panel,
             text="No image loaded",
             anchor="center",
             relief="solid",
@@ -242,7 +248,7 @@ class WatermarkApp:
         self.preview_label.grid(row=1, column=0, sticky="nsew")
         self.preview_label.bind("<Configure>", self.on_preview_resize)
 
-        preview_actions = ttk.Frame(preview_panel, padding=(0, 10, 0, 0))
+        preview_actions = ttk.Frame(self.preview_panel, padding=(0, 10, 0, 0))
         preview_actions.grid(row=2, column=0, sticky="ew")
         preview_actions.columnconfigure(0, weight=1)
         preview_actions.columnconfigure(1, weight=1)
@@ -254,33 +260,33 @@ class WatermarkApp:
             row=0, column=1, sticky="ew", padx=(6, 0)
         )
 
-        ttk.Label(controls_panel, text="Watermark Text").grid(row=0, column=0, sticky="w")
-        self.text_input = tk.Text(controls_panel, height=4, width=28, wrap="word", relief="solid", bd=1)
+        ttk.Label(self.controls_panel, text="Watermark Text").grid(row=0, column=0, sticky="w")
+        self.text_input = tk.Text(self.controls_panel, height=4, width=1, wrap="word", relief="solid", bd=1)
         self.text_input.grid(row=1, column=0, sticky="ew", pady=(4, 14))
         self.text_input.insert("1.0", self.settings["text"])
         self.text_input.edit_modified(False)
 
-        ttk.Label(controls_panel, textvariable=self.font_size_label_var).grid(row=2, column=0, sticky="w")
+        ttk.Label(self.controls_panel, textvariable=self.font_size_label_var).grid(row=2, column=0, sticky="w")
         ttk.Scale(
-            controls_panel,
+            self.controls_panel,
             from_=12,
             to=160,
             orient="horizontal",
             variable=self.font_size_var,
         ).grid(row=3, column=0, sticky="ew", pady=(4, 14))
 
-        ttk.Label(controls_panel, textvariable=self.angle_label_var).grid(row=4, column=0, sticky="w")
+        ttk.Label(self.controls_panel, textvariable=self.angle_label_var).grid(row=4, column=0, sticky="w")
         ttk.Scale(
-            controls_panel,
+            self.controls_panel,
             from_=-90,
             to=90,
             orient="horizontal",
             variable=self.angle_var,
         ).grid(row=5, column=0, sticky="ew", pady=(4, 14))
 
-        ttk.Label(controls_panel, text="Color").grid(row=6, column=0, sticky="w")
+        ttk.Label(self.controls_panel, text="Color").grid(row=6, column=0, sticky="w")
         self.color_button = tk.Button(
-            controls_panel,
+            self.controls_panel,
             text="Choose Color",
             command=self.choose_color,
             relief="ridge",
@@ -288,16 +294,16 @@ class WatermarkApp:
         )
         self.color_button.grid(row=7, column=0, sticky="ew", pady=(4, 14))
 
-        ttk.Label(controls_panel, textvariable=self.opacity_label_var).grid(row=8, column=0, sticky="w")
+        ttk.Label(self.controls_panel, textvariable=self.opacity_label_var).grid(row=8, column=0, sticky="w")
         ttk.Scale(
-            controls_panel,
+            self.controls_panel,
             from_=5,
             to=100,
             orient="horizontal",
             variable=self.opacity_percent_var,
         ).grid(row=9, column=0, sticky="ew", pady=(4, 14))
 
-        spacing_frame = ttk.Frame(controls_panel, padding=(0, 0, 0, 6))
+        spacing_frame = ttk.Frame(self.controls_panel, padding=(0, 0, 0, 6))
         spacing_frame.grid(row=10, column=0, sticky="ew", pady=(0, 12))
         spacing_frame.columnconfigure(0, weight=1)
         spacing_frame.columnconfigure(1, weight=1)
@@ -331,31 +337,33 @@ class WatermarkApp:
         ttk.Entry(spacing_frame, textvariable=self.space_bottom_var, width=5, justify="center").grid(
             row=6, column=1, pady=(4, 0)
         )
+        spacing_frame.update_idletasks()
+        spacing_frame.grid_propagate(False)
+        spacing_frame.configure(width=1, height=spacing_frame.winfo_reqheight())
 
-        ttk.Checkbutton(controls_panel, text="Repeat Across Image", variable=self.repeat_var).grid(
+        ttk.Checkbutton(self.controls_panel, text="Repeat Across Image", variable=self.repeat_var).grid(
             row=11, column=0, sticky="w", pady=(0, 18)
         )
 
-        instructions = (
-            "Changes are applied immediately.\n"
-            "Settings save automatically.\n"
-            "Drag and drop works on Windows."
-        )
-        ttk.Label(controls_panel, text=instructions, justify="left").grid(row=12, column=0, sticky="w")
+        footer_links = ttk.Frame(self.controls_panel)
+        footer_links.grid(row=12, column=0, sticky="ew")
+        self.add_footer_text(footer_links, "Built with Codex", 0, 0)
+        self.add_footer_text(footer_links, " | ", 1, 0)
+        self.add_footer_text(footer_links, f"version {APP_VERSION}", 2, 0)
+        
+        
+        self.add_footer_link(footer_links, "Project on GitHub", PROJECT_GITHUB_URL, 0, 1)
+        self.add_footer_text(footer_links, " | ", 1, 1)
+        self.add_footer_link(footer_links, "@Dolevgit", AUTHOR_GITHUB_URL, 2, 1)
+        footer_links.update_idletasks()
+        footer_links.grid_propagate(False)
+        footer_links.configure(width=1, height=footer_links.winfo_reqheight())
 
         footer = ttk.Frame(self.root, padding=(14, 0, 14, 10))
         footer.pack(fill="x", side="bottom")
         footer.columnconfigure(0, weight=1)
         ttk.Label(footer, textvariable=self.status_var).grid(row=0, column=0, sticky="w")
-        footer_links = ttk.Frame(footer)
-        footer_links.grid(row=0, column=1, sticky="e")
-        self.add_footer_text(footer_links, "Built with Codex", 0)
-        self.add_footer_text(footer_links, " | ", 1)
-        self.add_footer_link(footer_links, "@Dolevgit", AUTHOR_GITHUB_URL, 2)
-        self.add_footer_text(footer_links, " | ", 3)
-        self.add_footer_link(footer_links, "Project on GitHub", PROJECT_GITHUB_URL, 4)
-        self.add_footer_text(footer_links, " | ", 5)
-        self.add_footer_text(footer_links, f"version {APP_VERSION}", 6)
+        self.root.after_idle(self.update_main_panel_weights)
 
     def attach_traces(self) -> None:
         self.root.bind("<Configure>", self.on_window_configure)
@@ -438,9 +446,34 @@ class WatermarkApp:
     def on_window_configure(self, event: tk.Event) -> None:
         if event.widget is not self.root:
             return
+        self.update_main_panel_weights(event.width)
         if self.save_geometry_after_id is not None:
             self.root.after_cancel(self.save_geometry_after_id)
         self.save_geometry_after_id = self.root.after(250, self.persist_window_geometry)
+
+    def update_main_panel_weights(self, width: int | None = None) -> None:
+        if self.container is None or self.controls_panel is None:
+            return
+
+        if width is None or width <= 1:
+            self.root.update_idletasks()
+            width = self.root.winfo_width()
+
+        if width < 300:
+            left_weight, right_weight = 1, 1
+        elif width < 500:
+            left_weight, right_weight = 1, 2
+        elif width < 1000:
+            left_weight, right_weight = 1, 3
+        else:
+            left_weight, right_weight = 1, 4
+
+        side_panel_width = round(width * right_weight / (left_weight + right_weight))
+        side_panel_width = max(SIDE_PANEL_MIN_WIDTH, min(side_panel_width, SIDE_PANEL_MAX_WIDTH))
+
+        self.controls_panel.configure(width=side_panel_width)
+        self.container.columnconfigure(0, weight=1)
+        self.container.columnconfigure(1, weight=0, minsize=side_panel_width)
 
     def persist_window_geometry(self) -> None:
         self.save_geometry_after_id = None
@@ -470,12 +503,12 @@ class WatermarkApp:
         color = self.color_var.get()
         self.color_button.configure(bg=color, activebackground=color, fg=self.pick_button_text_color(color))
 
-    def add_footer_text(self, parent: ttk.Frame, text: str, column: int) -> None:
-        ttk.Label(parent, text=text).grid(row=0, column=column, sticky="e")
+    def add_footer_text(self, parent: ttk.Frame, text: str, column: int, row: int = 0) -> None:
+        ttk.Label(parent, text=text).grid(row=row, column=column, sticky="e")
 
-    def add_footer_link(self, parent: ttk.Frame, text: str, url: str, column: int) -> None:
+    def add_footer_link(self, parent: ttk.Frame, text: str, url: str, column: int, row: int = 0) -> None:
         link = tk.Label(parent, text=text, fg="#0563c1", cursor="hand2")
-        link.grid(row=0, column=column, sticky="e")
+        link.grid(row=row, column=column, sticky="e")
         link.bind("<Button-1>", lambda _event: webbrowser.open_new(url))
 
     def pick_button_text_color(self, color: str) -> str:

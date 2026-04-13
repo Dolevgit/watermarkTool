@@ -1,13 +1,14 @@
 {
-  "text": "",
-  "font_size": 36,
-  "angle": 45,
-  "color": "#ffffff",
+  "text": "Build with codex",
+  "font_size": 75,
+  "angle": 13,
+  "color": "#040404",
   "opacity": 0.3,
   "repeat": true,
   "space_left": 0,
-  "space_right": 0,
+  "space_right": 50,
   "space_top": 0,
   "space_bottom": 0,
-  "isDebug": false
+  "isDebug": false,
+  "window_geometry": "1097x713+139+20"
 }

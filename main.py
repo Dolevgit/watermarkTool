@@ -21,6 +21,9 @@ APP_TITLE = "Watermark Tool"
 APP_VERSION = "1.1"
 AUTHOR_GITHUB_URL = "https://github.com/Dolevgit"
 PROJECT_GITHUB_URL = "https://github.com/Dolevgit/watermarkTool"
+DEFAULT_WINDOW_GEOMETRY = "1120x740"
+MIN_WINDOW_WIDTH = 600
+MIN_WINDOW_HEIGHT = 390
 DEFAULT_SETTINGS = {
     "text": "Build with Codex",
     "font_size": 36,
@@ -33,6 +36,7 @@ DEFAULT_SETTINGS = {
     "space_top": 0,
     "space_bottom": 0,
     "isDebug": False,
+    "window_geometry": DEFAULT_WINDOW_GEOMETRY,
 }
 IMAGE_FILE_TYPES = [
     ("Images", "*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.tif;*.tiff"),
@@ -52,6 +56,17 @@ def get_app_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
+
+
+def get_resource_dir() -> Path:
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS)
+    return Path(__file__).resolve().parent
+
+
+def get_icon_path() -> Path:
+    resource_dir = get_resource_dir()
+    return resource_dir / "AppIcons" / "app.ico"
 
 
 def get_settings_path() -> Path:
@@ -139,8 +154,10 @@ class WatermarkApp:
     def __init__(self, root: TkinterDnD.Tk, startup_settings: dict) -> None:
         self.root = root
         self.root.title(APP_TITLE)
-        self.root.geometry("1120x740")
-        self.root.minsize(900, 620)
+        self.root.geometry(str(startup_settings.get("window_geometry", DEFAULT_WINDOW_GEOMETRY)))
+        self.root.minsize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+        self.app_icon: tk.PhotoImage | None = None
+        self.save_geometry_after_id: str | None = None
 
         self.settings_path = get_settings_path()
         self.log_path = get_log_path()
@@ -173,18 +190,34 @@ class WatermarkApp:
         self.status_var = tk.StringVar(value=status)
         self.file_var = tk.StringVar(value="Drop an image here or use Open Image.")
 
+        self.configure_window_icon()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.build_ui()
         self.attach_traces()
         self.refresh_control_labels()
         self.update_color_button()
         self.setup_drag_and_drop()
 
+    def configure_window_icon(self) -> None:
+        icon_path = get_icon_path()
+
+        if icon_path.exists():
+            try:
+                self.root.iconbitmap(default=str(icon_path))
+            except tk.TclError:
+                logging.exception("Failed to load window .ico icon: %s", icon_path)
+            try:
+                self.app_icon = ImageTk.PhotoImage(Image.open(icon_path))
+                self.root.iconphoto(True, self.app_icon)
+            except (tk.TclError, OSError):
+                logging.exception("Failed to load window icon image: %s", icon_path)
+
     def build_ui(self) -> None:
         container = ttk.Frame(self.root, padding=14)
         container.pack(fill="both", expand=True)
 
         container.columnconfigure(0, weight=1)
-        container.columnconfigure(1, weight=1)
+        container.columnconfigure(1, weight=2)
         container.rowconfigure(0, weight=1)
 
         preview_panel = ttk.Frame(container, padding=(0, 0, 14, 0))
@@ -325,6 +358,7 @@ class WatermarkApp:
         self.add_footer_text(footer_links, f"version {APP_VERSION}", 6)
 
     def attach_traces(self) -> None:
+        self.root.bind("<Configure>", self.on_window_configure)
         for variable in (
             self.font_size_var,
             self.angle_var,
@@ -364,7 +398,16 @@ class WatermarkApp:
             "space_top": self.parse_non_negative_int(self.space_top_var.get()),
             "space_bottom": self.parse_non_negative_int(self.space_bottom_var.get()),
             "isDebug": self.is_debug,
+            "window_geometry": self.get_window_geometry(),
         }
+
+    def get_window_geometry(self) -> str:
+        self.root.update_idletasks()
+        width = max(self.root.winfo_width(), MIN_WINDOW_WIDTH)
+        height = max(self.root.winfo_height(), MIN_WINDOW_HEIGHT)
+        x = self.root.winfo_x()
+        y = self.root.winfo_y()
+        return f"{width}x{height}+{x}+{y}"
 
     def parse_non_negative_int(self, value: str) -> int:
         try:
@@ -391,6 +434,32 @@ class WatermarkApp:
             self.status_var.set(f"Settings saved to {self.settings_path}")
 
         self.schedule_render()
+
+    def on_window_configure(self, event: tk.Event) -> None:
+        if event.widget is not self.root:
+            return
+        if self.save_geometry_after_id is not None:
+            self.root.after_cancel(self.save_geometry_after_id)
+        self.save_geometry_after_id = self.root.after(250, self.persist_window_geometry)
+
+    def persist_window_geometry(self) -> None:
+        self.save_geometry_after_id = None
+        geometry = self.get_window_geometry()
+        if self.settings.get("window_geometry") == geometry:
+            return
+
+        self.settings["window_geometry"] = geometry
+        try:
+            self.write_settings(self.settings)
+        except OSError as exc:
+            self.status_var.set(f"Could not save settings: {exc}")
+
+    def on_close(self) -> None:
+        if self.save_geometry_after_id is not None:
+            self.root.after_cancel(self.save_geometry_after_id)
+            self.save_geometry_after_id = None
+        self.persist_window_geometry()
+        self.root.destroy()
 
     def refresh_control_labels(self) -> None:
         self.font_size_label_var.set(f"Font Size: {int(float(self.font_size_var.get()))}")
@@ -487,8 +556,37 @@ class WatermarkApp:
             self.update_preview_image()
             return
 
-        self.rendered_image = render_watermark(self.source_image, self.settings)
+        preview_source, preview_settings = self.build_preview_render_input()
+        self.rendered_image = render_watermark(preview_source, preview_settings)
         self.update_preview_image()
+
+    def build_preview_render_input(self) -> tuple[Image.Image, dict]:
+        preview_width, preview_height = self.get_preview_render_size()
+        source_width, source_height = self.source_image.size
+        scale = min(preview_width / source_width, preview_height / source_height, 1.0)
+
+        if scale >= 1.0:
+            return self.source_image.copy(), self.settings.copy()
+
+        preview_size = (
+            max(1, int(round(source_width * scale))),
+            max(1, int(round(source_height * scale))),
+        )
+        preview_source = self.source_image.resize(preview_size, Image.Resampling.LANCZOS)
+        preview_settings = self.settings.copy()
+        preview_settings["font_size"] = max(8, int(round(self.settings["font_size"] * scale)))
+        preview_settings["space_left"] = int(round(self.settings["space_left"] * scale))
+        preview_settings["space_right"] = int(round(self.settings["space_right"] * scale))
+        preview_settings["space_top"] = int(round(self.settings["space_top"] * scale))
+        preview_settings["space_bottom"] = int(round(self.settings["space_bottom"] * scale))
+        return preview_source, preview_settings
+
+    def get_preview_render_size(self) -> tuple[int, int]:
+        width = self.preview_label.winfo_width() - 24
+        height = self.preview_label.winfo_height() - 24
+        if width <= 0 or height <= 0:
+            return 360, 360
+        return max(width, 180), max(height, 180)
 
     def update_preview_image(self) -> None:
         if self.rendered_image is None:
@@ -496,20 +594,15 @@ class WatermarkApp:
             self.preview_photo = None
             return
 
-        max_width = max(self.preview_label.winfo_width() - 24, 180)
-        max_height = max(self.preview_label.winfo_height() - 24, 180)
-        preview = self.rendered_image.copy()
-        preview.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
-
-        self.preview_photo = ImageTk.PhotoImage(preview)
+        self.preview_photo = ImageTk.PhotoImage(self.rendered_image)
         self.preview_label.configure(image=self.preview_photo, text="")
 
     def on_preview_resize(self, _event: tk.Event) -> None:
-        if self.rendered_image is not None:
-            self.update_preview_image()
+        if self.source_image is not None:
+            self.schedule_render()
 
     def save_image(self) -> None:
-        if self.rendered_image is None:
+        if self.source_image is None:
             messagebox.showinfo(APP_TITLE, "Load an image first.")
             return
 
@@ -527,11 +620,11 @@ class WatermarkApp:
             return
 
         output_path = Path(target)
-        image_to_save = self.rendered_image
+        image_to_save = render_watermark(self.source_image, self.settings)
 
         try:
             if output_path.suffix.lower() in {".jpg", ".jpeg"}:
-                image_to_save = self.rendered_image.convert("RGB")
+                image_to_save = image_to_save.convert("RGB")
             image_to_save.save(output_path)
         except OSError as exc:
             messagebox.showerror(APP_TITLE, f"Could not save image:\n{exc}")

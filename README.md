@@ -1,5 +1,7 @@
 # Watermark Tool
 
+![ActiveTime logo](Logo.png)
+
 Simple desktop utility for adding repeated text watermarks to images.
 
 No installer is required.

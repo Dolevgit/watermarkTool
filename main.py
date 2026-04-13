@@ -20,7 +20,7 @@ from tkinterdnd2 import COPY, DND_FILES, TkinterDnD
 APP_TITLE = "Watermark Tool"
 APP_VERSION = "1.1"
 AUTHOR_GITHUB_URL = "https://github.com/Dolevgit"
-PROJECT_GITHUB_URL = "https://github.com/Dolevgit/watermarkTool"
+PROJECT_GITHUB_URL = "https://github.com/Dolevgit/watermarkToolDesktop"
 DEFAULT_WINDOW_GEOMETRY = "1120x740"
 MIN_WINDOW_WIDTH = 600
 MIN_WINDOW_HEIGHT = 390

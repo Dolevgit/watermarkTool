@@ -89,8 +89,10 @@ python main.py
 Build EXE:
 
 ```bash
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name watermark-tool main.py
+python -m PyInstaller watermark-tool.spec
 ```
+
+The spec file includes the EXE icon and bundles `AppIcons/app.ico` so the built app also has the runtime window icon.
 
 ## Known Issues
 

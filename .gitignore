@@ -11,5 +11,3 @@ env/
 .pytest_cache/
 .mypy_cache/
 dist/
-
-watermark-tool.spec

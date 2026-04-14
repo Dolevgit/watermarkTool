@@ -31,12 +31,20 @@ SETTINGS_DATE_TOKEN = "{date}"
 DEFAULT_SETTINGS = {
     "text": "Build with Codex",
     "text_mode": "normal",
-    "split_text": None,
-    "font_size": 36,
+    "split_text": [
+        [
+        "Sent to", "example.com"
+        ],
+        [
+        "on",
+        "{date}"
+        ]
+    ],
+    "font_size": 21,
     "angle": 45,
     "color": "#000000",
-    "border_color": "",
-    "opacity": 0.3,
+    "border_color": "#ffffff",
+    "opacity": 0.35,
     "repeat": True,
     "space_left": 0,
     "space_right": 0,

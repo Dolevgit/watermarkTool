@@ -75,8 +75,15 @@ def render_watermark(image: Image.Image, settings: dict) -> Image.Image:
     space_bottom = max(0, int(settings.get("space_bottom", 0)))
 
     rgb = ImageColor.getrgb(settings.get("color", "#ffffff"))
+    border_color = (settings.get("border_color") or "").strip()
     alpha = max(0, min(255, int(round(opacity * 255))))
     fill = (*rgb, alpha)
+    stroke_fill = None
+    stroke_width = 0
+    if border_color:
+        stroke_rgb = ImageColor.getrgb(border_color)
+        stroke_fill = (*stroke_rgb, alpha)
+        stroke_width = max(1, int(round(font_size / 18)))
 
     width, height = base.size
     diagonal = int(math.ceil(math.hypot(width, height)))
@@ -86,7 +93,14 @@ def render_watermark(image: Image.Image, settings: dict) -> Image.Image:
     overlay = Image.new("RGBA", (overlay_size, overlay_size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     font = _load_font(font_size)
-    bbox = draw.multiline_textbbox((0, 0), text, font=font, spacing=max(4, font_size // 5), align="center")
+    bbox = draw.multiline_textbbox(
+        (0, 0),
+        text,
+        font=font,
+        spacing=max(4, font_size // 5),
+        align="center",
+        stroke_width=stroke_width,
+    )
     text_width = int(math.ceil(bbox[2] - bbox[0]))
     text_height = int(math.ceil(bbox[3] - bbox[1]))
 
@@ -102,6 +116,8 @@ def render_watermark(image: Image.Image, settings: dict) -> Image.Image:
                     text,
                     font=font,
                     fill=fill,
+                    stroke_width=stroke_width,
+                    stroke_fill=stroke_fill,
                     spacing=max(4, font_size // 5),
                     align="center",
                 )
@@ -115,6 +131,8 @@ def render_watermark(image: Image.Image, settings: dict) -> Image.Image:
             text,
             font=font,
             fill=fill,
+            stroke_width=stroke_width,
+            stroke_fill=stroke_fill,
             spacing=max(4, font_size // 5),
             align="center",
         )

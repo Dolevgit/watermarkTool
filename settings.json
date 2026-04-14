@@ -1,14 +1,25 @@
 {
-  "text": "Build with codex",
-  "font_size": 75,
-  "angle": 13,
+  "text": "Build with codex\nBuild with 14/04/2026",
+  "text_mode": "split",
+  "split_text": [
+    [
+      "Build with codex"
+    ],
+    [
+      "Send at",
+      "{date}"
+    ]
+  ],
+  "font_size": 92,
+  "angle": 45,
   "color": "#040404",
+  "border_color": "#ffffff",
   "opacity": 0.3,
   "repeat": true,
   "space_left": 0,
-  "space_right": 50,
+  "space_right": 80,
   "space_top": 0,
   "space_bottom": 0,
   "isDebug": false,
-  "window_geometry": "1097x713+139+20"
+  "window_geometry": "867x654+328+93"
 }

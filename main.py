@@ -6,6 +6,7 @@ import os
 import sys
 import traceback
 import faulthandler
+from datetime import date as current_date
 from pathlib import Path
 import tkinter as tk
 import webbrowser
@@ -26,11 +27,15 @@ MIN_WINDOW_WIDTH = 600
 MIN_WINDOW_HEIGHT = 390
 SIDE_PANEL_MIN_WIDTH = 50
 SIDE_PANEL_MAX_WIDTH = 250
+SETTINGS_DATE_TOKEN = "{date}"
 DEFAULT_SETTINGS = {
     "text": "Build with Codex",
+    "text_mode": "normal",
+    "split_text": None,
     "font_size": 36,
     "angle": 45,
     "color": "#000000",
+    "border_color": "",
     "opacity": 0.3,
     "repeat": True,
     "space_left": 0,
@@ -87,18 +92,98 @@ def get_log_path() -> Path:
     return get_settings_path().with_name("watermark-tool.log")
 
 
+def replace_bare_settings_tokens(raw_text: str) -> str:
+    parts: list[str] = []
+    in_string = False
+    escaping = False
+    index = 0
+
+    while index < len(raw_text):
+        char = raw_text[index]
+
+        if in_string:
+            parts.append(char)
+            if escaping:
+                escaping = False
+            elif char == "\\":
+                escaping = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+
+        if char == '"':
+            in_string = True
+            parts.append(char)
+            index += 1
+            continue
+
+        if raw_text.startswith("date", index):
+            previous_char = raw_text[index - 1] if index > 0 else ""
+            next_char = raw_text[index + 4] if index + 4 < len(raw_text) else ""
+            if not (previous_char.isalnum() or previous_char == "_") and not (next_char.isalnum() or next_char == "_"):
+                parts.append(f'"{SETTINGS_DATE_TOKEN}"')
+                index += 4
+                continue
+
+        parts.append(char)
+        index += 1
+
+    return "".join(parts)
+
+
+def dump_settings_text(settings: dict) -> str:
+    return f"{json.dumps(settings, indent=2)}\n"
+
+
+def is_settings_date_token(value: object) -> bool:
+    return value == SETTINGS_DATE_TOKEN or value == "__WATERMARK_DATE_TOKEN__"
+
+
+def split_text_into_rows(text: str) -> list[list[str]]:
+    top_text, bottom_text = (text.split("\n", 1) + [""])[:2] if "\n" in text else [text, ""]
+    return [[top_text], [bottom_text]]
+
+
+def migrate_legacy_split_rows(split_rows: object, fallback_text: str) -> list[list[str]] | None:
+    if not isinstance(split_rows, list):
+        return None
+
+    migrated_rows: list[list[str]] = []
+    for row in split_rows[:2]:
+        if not isinstance(row, dict):
+            continue
+        left_text = str(row.get("left", ""))
+        right_text = str(row.get("right", ""))
+        if bool(row.get("split", False)):
+            migrated_rows.append([left_text, right_text])
+        else:
+            migrated_rows.append([left_text])
+
+    if not migrated_rows:
+        return split_text_into_rows(fallback_text)
+
+    while len(migrated_rows) < 2:
+        migrated_rows.append([""])
+    return migrated_rows
+
+
 def load_startup_settings() -> dict:
     settings_path = get_settings_path()
     if not settings_path.exists():
         with settings_path.open("w", encoding="utf-8") as handle:
-            json.dump(DEFAULT_SETTINGS, handle, indent=2)
+            handle.write(dump_settings_text(DEFAULT_SETTINGS))
         return DEFAULT_SETTINGS.copy()
 
     try:
         with settings_path.open("r", encoding="utf-8") as handle:
-            loaded = json.load(handle)
+            loaded = json.loads(replace_bare_settings_tokens(handle.read()))
     except (json.JSONDecodeError, OSError):
         return DEFAULT_SETTINGS.copy()
+
+    legacy_split_text = migrate_legacy_split_rows(loaded.get("split_rows"), str(loaded.get("text", "")))
+    if "split_text" not in loaded and legacy_split_text is not None:
+        loaded["split_text"] = legacy_split_text
 
     merged = DEFAULT_SETTINGS.copy()
     merged.update({key: loaded[key] for key in DEFAULT_SETTINGS if key in loaded})
@@ -175,11 +260,28 @@ class WatermarkApp:
         self.container: ttk.Frame | None = None
         self.preview_panel: ttk.Frame | None = None
         self.controls_panel: ttk.Frame | None = None
+        self.text_input_container: ttk.Frame | None = None
+        self.text_input: tk.Text | None = None
+        self.text_mode_button: ttk.Button | None = None
+        self.split_row_frames: list[ttk.Frame] = []
+        self.split_row_toggle_buttons: list[ttk.Button] = []
+        self.split_row_content_frames: list[ttk.Frame] = []
+        self.split_row_single_inputs: list[tk.Text] = []
+        self.split_row_left_inputs: list[tk.Text] = []
+        self.split_row_right_inputs: list[tk.Text] = []
+        self.split_row_states: list[bool] = []
+        self.split_row_single_is_date: list[bool] = []
+        self.split_row_left_is_date: list[bool] = []
+        self.split_row_right_is_date: list[bool] = []
+        self.updating_text_widgets = False
+        self.text_input_background = "#ffffff"
 
+        self.text_mode_var = tk.StringVar(value=self.settings["text_mode"])
         self.font_size_var = tk.IntVar(value=self.settings["font_size"])
         self.angle_var = tk.IntVar(value=self.settings["angle"])
         self.opacity_percent_var = tk.IntVar(value=int(round(self.settings["opacity"] * 100)))
         self.color_var = tk.StringVar(value=self.settings["color"])
+        self.border_color_var = tk.StringVar(value=self.settings["border_color"])
         self.repeat_var = tk.BooleanVar(value=self.settings["repeat"])
         self.space_left_var = tk.StringVar(value=str(self.settings["space_left"]))
         self.space_right_var = tk.StringVar(value=str(self.settings["space_right"]))
@@ -200,7 +302,7 @@ class WatermarkApp:
         self.build_ui()
         self.attach_traces()
         self.refresh_control_labels()
-        self.update_color_button()
+        self.update_color_buttons()
         self.setup_drag_and_drop()
 
     def configure_window_icon(self) -> None:
@@ -260,11 +362,33 @@ class WatermarkApp:
             row=0, column=1, sticky="ew", padx=(6, 0)
         )
 
-        ttk.Label(self.controls_panel, text="Watermark Text").grid(row=0, column=0, sticky="w")
-        self.text_input = tk.Text(self.controls_panel, height=4, width=1, wrap="word", relief="solid", bd=1)
-        self.text_input.grid(row=1, column=0, sticky="ew", pady=(4, 14))
-        self.text_input.insert("1.0", self.settings["text"])
-        self.text_input.edit_modified(False)
+        text_header = ttk.Frame(self.controls_panel)
+        text_header.grid(row=0, column=0, sticky="ew")
+        text_header.columnconfigure(0, weight=1)
+        ttk.Label(text_header, text="Watermark Text").grid(row=0, column=0, sticky="w")
+        self.text_mode_button = ttk.Button(text_header, text="", command=self.toggle_text_mode, width=12)
+        self.text_mode_button.grid(row=0, column=1, sticky="e")
+
+        self.text_input_container = ttk.Frame(self.controls_panel)
+        self.text_input_container.grid(row=1, column=0, sticky="ew", pady=(4, 14))
+        self.text_input_container.columnconfigure(0, weight=1)
+
+        self.text_input = tk.Text(
+            self.text_input_container,
+            height=4,
+            width=1,
+            wrap="word",
+            relief="solid",
+            bd=1,
+            undo=True,
+            autoseparators=True,
+            maxundo=-1,
+        )
+        self.set_text_widget_value(self.text_input, self.settings["text"])
+        self.text_input_background = self.text_input.cget("bg")
+        self.build_split_row_widgets()
+        self.load_split_rows_from_settings()
+        self.update_text_mode_ui(initializing=True)
 
         ttk.Label(self.controls_panel, textvariable=self.font_size_label_var).grid(row=2, column=0, sticky="w")
         ttk.Scale(
@@ -294,17 +418,37 @@ class WatermarkApp:
         )
         self.color_button.grid(row=7, column=0, sticky="ew", pady=(4, 14))
 
-        ttk.Label(self.controls_panel, textvariable=self.opacity_label_var).grid(row=8, column=0, sticky="w")
+        ttk.Label(self.controls_panel, text="Border Color").grid(row=8, column=0, sticky="w")
+        border_actions = ttk.Frame(self.controls_panel)
+        border_actions.grid(row=9, column=0, sticky="ew", pady=(4, 14))
+        border_actions.columnconfigure(0, weight=1)
+        border_actions.columnconfigure(1, weight=0)
+        self.border_color_button = tk.Button(
+            border_actions,
+            text="Choose Border Color",
+            command=self.choose_border_color,
+            relief="ridge",
+            bd=1,
+        )
+        self.border_color_button.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self.clear_border_button = ttk.Button(
+            border_actions,
+            text="Clear",
+            command=self.clear_border_color,
+        )
+        self.clear_border_button.grid(row=0, column=1)
+
+        ttk.Label(self.controls_panel, textvariable=self.opacity_label_var).grid(row=10, column=0, sticky="w")
         ttk.Scale(
             self.controls_panel,
             from_=5,
             to=100,
             orient="horizontal",
             variable=self.opacity_percent_var,
-        ).grid(row=9, column=0, sticky="ew", pady=(4, 14))
+        ).grid(row=11, column=0, sticky="ew", pady=(4, 14))
 
         spacing_frame = ttk.Frame(self.controls_panel, padding=(0, 0, 0, 6))
-        spacing_frame.grid(row=10, column=0, sticky="ew", pady=(0, 12))
+        spacing_frame.grid(row=12, column=0, sticky="ew", pady=(0, 12))
         spacing_frame.columnconfigure(0, weight=1)
         spacing_frame.columnconfigure(1, weight=1)
         spacing_frame.columnconfigure(2, weight=1)
@@ -342,11 +486,11 @@ class WatermarkApp:
         spacing_frame.configure(width=1, height=spacing_frame.winfo_reqheight())
 
         ttk.Checkbutton(self.controls_panel, text="Repeat Across Image", variable=self.repeat_var).grid(
-            row=11, column=0, sticky="w", pady=(0, 18)
+            row=13, column=0, sticky="w", pady=(0, 18)
         )
 
         footer_links = ttk.Frame(self.controls_panel)
-        footer_links.grid(row=12, column=0, sticky="ew")
+        footer_links.grid(row=14, column=0, sticky="ew")
         self.add_footer_text(footer_links, "Built with Codex", 0, 0)
         self.add_footer_text(footer_links, " | ", 1, 0)
         self.add_footer_text(footer_links, f"version {APP_VERSION}", 2, 0)
@@ -359,10 +503,18 @@ class WatermarkApp:
         footer_links.grid_propagate(False)
         footer_links.configure(width=1, height=footer_links.winfo_reqheight())
 
-        footer = ttk.Frame(self.root, padding=(14, 0, 14, 10))
+        ttk.Separator(self.root, orient="horizontal").pack(fill="x", side="bottom")
+        footer = tk.Frame(self.root, bd=1, relief="sunken", background="#f0f0f0")
         footer.pack(fill="x", side="bottom")
         footer.columnconfigure(0, weight=1)
-        ttk.Label(footer, textvariable=self.status_var).grid(row=0, column=0, sticky="w")
+        tk.Label(
+            footer,
+            textvariable=self.status_var,
+            anchor="w",
+            padx=6,
+            pady=2,
+            background="#f0f0f0",
+        ).grid(row=0, column=0, sticky="ew")
         self.root.after_idle(self.update_main_panel_weights)
 
     def attach_traces(self) -> None:
@@ -372,6 +524,7 @@ class WatermarkApp:
             self.angle_var,
             self.opacity_percent_var,
             self.color_var,
+            self.border_color_var,
             self.repeat_var,
             self.space_left_var,
             self.space_right_var,
@@ -379,7 +532,31 @@ class WatermarkApp:
             self.space_bottom_var,
         ):
             variable.trace_add("write", self.on_settings_changed)
-        self.text_input.bind("<<Modified>>", self.on_text_modified)
+        split_widgets = self.split_row_single_inputs + self.split_row_left_inputs + self.split_row_right_inputs
+        for widget in [self.text_input, *split_widgets]:
+            widget.bind("<<Modified>>", self.on_text_modified)
+            widget.bind("<Control-z>", self.undo_text_edit)
+            widget.bind("<Control-y>", self.redo_text_edit)
+            widget.bind("<Control-Z>", self.undo_text_edit)
+            widget.bind("<Control-Y>", self.redo_text_edit)
+        for row_index, widget in enumerate(self.split_row_single_inputs):
+            widget.bind("<Button-1>", self.select_all_split_text)
+            widget.bind("<Button-3>", lambda event, idx=row_index: self.toggle_split_cell_date(event, idx, "single"))
+            widget.bind("<KeyPress>", lambda event, idx=row_index: self.block_date_cell_edit(event, idx, "single"))
+            widget.bind("<Return>", lambda event: "break")
+            widget.bind("<KP_Enter>", lambda event: "break")
+        for row_index, widget in enumerate(self.split_row_left_inputs):
+            widget.bind("<Button-1>", self.select_all_split_text)
+            widget.bind("<Button-3>", lambda event, idx=row_index: self.toggle_split_cell_date(event, idx, "left"))
+            widget.bind("<KeyPress>", lambda event, idx=row_index: self.block_date_cell_edit(event, idx, "left"))
+            widget.bind("<Return>", lambda event: "break")
+            widget.bind("<KP_Enter>", lambda event: "break")
+        for row_index, widget in enumerate(self.split_row_right_inputs):
+            widget.bind("<Button-1>", self.select_all_split_text)
+            widget.bind("<Button-3>", lambda event, idx=row_index: self.toggle_split_cell_date(event, idx, "right"))
+            widget.bind("<KeyPress>", lambda event, idx=row_index: self.block_date_cell_edit(event, idx, "right"))
+            widget.bind("<Return>", lambda event: "break")
+            widget.bind("<KP_Enter>", lambda event: "break")
 
     def setup_drag_and_drop(self) -> None:
         logging.info("Installing drag and drop hook")
@@ -391,14 +568,17 @@ class WatermarkApp:
 
     def write_settings(self, settings: dict) -> None:
         with self.settings_path.open("w", encoding="utf-8") as handle:
-            json.dump(settings, handle, indent=2)
+            handle.write(dump_settings_text(settings))
 
     def get_current_settings(self) -> dict:
         return {
-            "text": self.text_input.get("1.0", "end-1c"),
+            "text": self.get_text_widget_value(self.text_input),
+            "text_mode": self.text_mode_var.get(),
+            "split_text": self.get_split_text_state(),
             "font_size": int(float(self.font_size_var.get())),
             "angle": int(float(self.angle_var.get())),
             "color": self.color_var.get(),
+            "border_color": self.border_color_var.get().strip(),
             "opacity": round(max(0, min(100, int(float(self.opacity_percent_var.get())))) / 100, 2),
             "repeat": bool(self.repeat_var.get()),
             "space_left": self.parse_non_negative_int(self.space_left_var.get()),
@@ -424,15 +604,379 @@ class WatermarkApp:
             return 0
 
     def on_text_modified(self, _event: tk.Event) -> None:
-        if not self.text_input.edit_modified():
+        if self.updating_text_widgets:
             return
-        self.text_input.edit_modified(False)
+        modified_widget = _event.widget
+        if not isinstance(modified_widget, tk.Text) or not modified_widget.edit_modified():
+            return
+        if self.is_split_text_widget(modified_widget):
+            self.normalize_split_widget_text(modified_widget)
+        modified_widget.edit_modified(False)
         self.on_settings_changed()
+
+    def undo_text_edit(self, event: tk.Event) -> str:
+        widget = event.widget
+        if not isinstance(widget, tk.Text):
+            return "break"
+        try:
+            widget.edit_undo()
+        except tk.TclError:
+            pass
+        return "break"
+
+    def redo_text_edit(self, event: tk.Event) -> str:
+        widget = event.widget
+        if not isinstance(widget, tk.Text):
+            return "break"
+        try:
+            widget.edit_redo()
+        except tk.TclError:
+            pass
+        return "break"
+
+    def get_text_widget_value(self, widget: tk.Text) -> str:
+        return widget.get("1.0", "end-1c")
+
+    def set_text_widget_value(self, widget: tk.Text, value: str) -> None:
+        self.updating_text_widgets = True
+        try:
+            widget.delete("1.0", "end")
+            widget.insert("1.0", value)
+            widget.edit_modified(False)
+        finally:
+            self.updating_text_widgets = False
+
+    def is_split_text_widget(self, widget: tk.Text) -> bool:
+        return widget in (
+            self.split_row_single_inputs
+            + self.split_row_left_inputs
+            + self.split_row_right_inputs
+        )
+
+    def normalize_split_widget_text(self, widget: tk.Text) -> None:
+        text = self.get_text_widget_value(widget)
+        single_line_text = " ".join(part for part in text.splitlines() if part)
+        if single_line_text != text:
+            self.set_text_widget_value(widget, single_line_text)
+
+    def select_all_split_text(self, event: tk.Event) -> str:
+        widget = event.widget
+        if not isinstance(widget, tk.Text):
+            return "break"
+        if self.root.focus_get() is widget:
+            widget.tag_remove("sel", "1.0", "end")
+            widget.mark_set("insert", f"@{event.x},{event.y}")
+            return "break"
+        widget.focus_set()
+        widget.tag_remove("sel", "1.0", "end")
+        widget.tag_add("sel", "1.0", "end-1c")
+        widget.mark_set("insert", "end-1c")
+        return "break"
+
+    def split_text_for_mode(self, text: str) -> tuple[str, str]:
+        if "\n" not in text:
+            return text, ""
+        top_text, bottom_text = text.split("\n", 1)
+        return top_text, bottom_text
+
+    def get_today_date_text(self) -> str:
+        return current_date.today().strftime("%d/%m/%Y")
+
+    def set_split_cell_value(self, widget: tk.Text, value: str, is_date: bool) -> None:
+        widget.configure(bg="#959595" if is_date else self.text_input_background)
+        self.set_text_widget_value(widget, self.get_today_date_text() if is_date else value)
+
+    def get_split_cell_render_value(self, widget: tk.Text, is_date: bool) -> str:
+        if is_date:
+            return self.get_today_date_text()
+        return self.get_text_widget_value(widget)
+
+    def get_split_cell_saved_value(self, widget: tk.Text, is_date: bool) -> str:
+        if is_date:
+            return SETTINGS_DATE_TOKEN
+        return self.get_text_widget_value(widget)
+
+    def get_split_cell_date_state(self, row_index: int, cell_name: str) -> bool:
+        if cell_name == "single":
+            return self.split_row_single_is_date[row_index]
+        if cell_name == "left":
+            return self.split_row_left_is_date[row_index]
+        return self.split_row_right_is_date[row_index]
+
+    def set_split_cell_date_state(self, row_index: int, cell_name: str, is_date: bool) -> None:
+        if cell_name == "single":
+            self.split_row_single_is_date[row_index] = is_date
+        elif cell_name == "left":
+            self.split_row_left_is_date[row_index] = is_date
+        else:
+            self.split_row_right_is_date[row_index] = is_date
+
+    def get_split_cell_widget(self, row_index: int, cell_name: str) -> tk.Text:
+        if cell_name == "single":
+            return self.split_row_single_inputs[row_index]
+        if cell_name == "left":
+            return self.split_row_left_inputs[row_index]
+        return self.split_row_right_inputs[row_index]
+
+    def block_date_cell_edit(self, event: tk.Event, row_index: int, cell_name: str) -> str | None:
+        if self.get_split_cell_date_state(row_index, cell_name):
+            return "break"
+        return None
+
+    def toggle_split_cell_date(self, _event: tk.Event, row_index: int, cell_name: str) -> str:
+        widget = self.get_split_cell_widget(row_index, cell_name)
+        is_date = self.get_split_cell_date_state(row_index, cell_name)
+        next_is_date = not is_date
+        next_value = self.get_today_date_text() if is_date else ""
+        self.set_split_cell_date_state(row_index, cell_name, next_is_date)
+        self.set_split_cell_value(widget, next_value, next_is_date)
+        self.on_settings_changed()
+        return "break"
+
+    def build_split_row_widgets(self) -> None:
+        for row_index in range(2):
+            row_frame = ttk.Frame(self.text_input_container)
+            row_frame.columnconfigure(1, weight=1)
+
+            toggle_button = ttk.Button(
+                row_frame,
+                text="+",
+                width=2,
+                command=lambda idx=row_index: self.toggle_split_row(idx),
+            )
+            toggle_button.grid(row=0, column=0, sticky="nw", padx=(0, 6))
+
+            content_frame = ttk.Frame(row_frame)
+            content_frame.grid(row=0, column=1, sticky="ew")
+            content_frame.columnconfigure(0, weight=1)
+            content_frame.columnconfigure(1, weight=1)
+
+            single_input = tk.Text(
+                content_frame,
+                height=1,
+                width=1,
+                wrap="word",
+                relief="solid",
+                bd=1,
+                undo=True,
+                autoseparators=True,
+                maxundo=-1,
+            )
+            left_input = tk.Text(
+                content_frame,
+                height=1,
+                width=1,
+                wrap="word",
+                relief="solid",
+                bd=1,
+                undo=True,
+                autoseparators=True,
+                maxundo=-1,
+            )
+            right_input = tk.Text(
+                content_frame,
+                height=1,
+                width=1,
+                wrap="word",
+                relief="solid",
+                bd=1,
+                undo=True,
+                autoseparators=True,
+                maxundo=-1,
+            )
+
+            self.split_row_frames.append(row_frame)
+            self.split_row_toggle_buttons.append(toggle_button)
+            self.split_row_content_frames.append(content_frame)
+            self.split_row_single_inputs.append(single_input)
+            self.split_row_left_inputs.append(left_input)
+            self.split_row_right_inputs.append(right_input)
+            self.split_row_states.append(False)
+            self.split_row_single_is_date.append(False)
+            self.split_row_left_is_date.append(False)
+            self.split_row_right_is_date.append(False)
+
+    def normalize_split_text(self, split_text: object, fallback_text: str) -> list[list[str]]:
+        normalized: list[list[str]] = []
+
+        if isinstance(split_text, list):
+            for row in split_text[:2]:
+                if isinstance(row, list):
+                    cells = [
+                        SETTINGS_DATE_TOKEN if is_settings_date_token(cell) else str(cell)
+                        for cell in row[:2]
+                    ]
+                    normalized.append(cells or [""])
+                elif isinstance(row, str):
+                    normalized.append([SETTINGS_DATE_TOKEN if is_settings_date_token(row) else row])
+
+        if normalized:
+            while len(normalized) < 2:
+                normalized.append([""])
+            return normalized
+
+        return split_text_into_rows(fallback_text)
+
+    def load_split_rows_from_settings(self) -> None:
+        split_text = self.normalize_split_text(self.settings.get("split_text"), self.settings["text"])
+        for row_index, row in enumerate(split_text):
+            left_value = row[0] if row else ""
+            right_value = row[1] if len(row) > 1 else ""
+            row_is_split = len(row) > 1
+            self.split_row_states[row_index] = row_is_split
+            self.split_row_single_is_date[row_index] = (not row_is_split) and left_value == SETTINGS_DATE_TOKEN
+            self.split_row_left_is_date[row_index] = row_is_split and left_value == SETTINGS_DATE_TOKEN
+            self.split_row_right_is_date[row_index] = row_is_split and right_value == SETTINGS_DATE_TOKEN
+            self.set_split_cell_value(
+                self.split_row_single_inputs[row_index],
+                "" if left_value == SETTINGS_DATE_TOKEN else str(left_value),
+                self.split_row_single_is_date[row_index],
+            )
+            self.set_split_cell_value(
+                self.split_row_left_inputs[row_index],
+                "" if left_value == SETTINGS_DATE_TOKEN else str(left_value),
+                self.split_row_left_is_date[row_index],
+            )
+            self.set_split_cell_value(
+                self.split_row_right_inputs[row_index],
+                "" if right_value == SETTINGS_DATE_TOKEN else str(right_value),
+                self.split_row_right_is_date[row_index],
+            )
+            self.refresh_split_row_ui(row_index)
+
+    def get_split_row_line_text(self, row_index: int) -> str:
+        if self.split_row_states[row_index]:
+            left_text = self.get_split_cell_render_value(
+                self.split_row_left_inputs[row_index],
+                self.split_row_left_is_date[row_index],
+            )
+            right_text = self.get_split_cell_render_value(
+                self.split_row_right_inputs[row_index],
+                self.split_row_right_is_date[row_index],
+            )
+            if left_text and right_text:
+                return f"{left_text} {right_text}"
+            return left_text or right_text
+        return self.get_split_cell_render_value(
+            self.split_row_single_inputs[row_index],
+            self.split_row_single_is_date[row_index],
+        )
+
+    def get_split_text_state(self) -> list[list[str]]:
+        rows: list[list[str]] = []
+        for row_index in range(2):
+            if self.split_row_states[row_index]:
+                rows.append(
+                    [
+                        self.get_split_cell_saved_value(
+                            self.split_row_left_inputs[row_index],
+                            self.split_row_left_is_date[row_index],
+                        ),
+                        self.get_split_cell_saved_value(
+                            self.split_row_right_inputs[row_index],
+                            self.split_row_right_is_date[row_index],
+                        ),
+                    ]
+                )
+            else:
+                rows.append(
+                    [
+                        self.get_split_cell_saved_value(
+                            self.split_row_single_inputs[row_index],
+                            self.split_row_single_is_date[row_index],
+                        )
+                    ]
+                )
+        return rows
+
+    def refresh_split_row_ui(self, row_index: int) -> None:
+        content_frame = self.split_row_content_frames[row_index]
+        single_input = self.split_row_single_inputs[row_index]
+        left_input = self.split_row_left_inputs[row_index]
+        right_input = self.split_row_right_inputs[row_index]
+
+        single_input.grid_forget()
+        left_input.grid_forget()
+        right_input.grid_forget()
+
+        if self.split_row_states[row_index]:
+            left_input.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+            right_input.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+            self.split_row_toggle_buttons[row_index].configure(text="-")
+        else:
+            single_input.grid(row=0, column=0, columnspan=2, sticky="ew")
+            self.split_row_toggle_buttons[row_index].configure(text="+")
+
+    def toggle_split_row(self, row_index: int) -> None:
+        if self.split_row_states[row_index]:
+            combined_text = self.get_split_row_line_text(row_index)
+            self.split_row_states[row_index] = False
+            self.split_row_single_is_date[row_index] = False
+            self.set_split_cell_value(self.split_row_single_inputs[row_index], combined_text, False)
+        else:
+            single_is_date = self.split_row_single_is_date[row_index]
+            single_text = self.get_text_widget_value(self.split_row_single_inputs[row_index])
+            self.split_row_states[row_index] = True
+            self.split_row_single_is_date[row_index] = False
+            self.split_row_left_is_date[row_index] = single_is_date
+            self.split_row_right_is_date[row_index] = False
+            self.set_split_cell_value(self.split_row_left_inputs[row_index], single_text, single_is_date)
+            self.set_split_cell_value(self.split_row_right_inputs[row_index], "", False)
+
+        self.refresh_split_row_ui(row_index)
+        self.on_settings_changed()
+
+    def get_current_watermark_text(self) -> str:
+        if self.text_mode_var.get() == "split":
+            return self.get_split_mode_text()
+        return self.get_text_widget_value(self.text_input)
+
+    def get_split_mode_text(self) -> str:
+        top_text = self.get_split_row_line_text(0)
+        bottom_text = self.get_split_row_line_text(1)
+        if top_text and bottom_text:
+            return f"{top_text}\n{bottom_text}"
+        return top_text or bottom_text
+
+    def get_render_settings(self, settings: dict | None = None) -> dict:
+        render_settings = (settings or self.settings).copy()
+        if render_settings.get("text_mode") == "split":
+            render_settings["text"] = self.get_split_mode_text()
+        else:
+            render_settings["text"] = self.get_text_widget_value(self.text_input)
+        return render_settings
+
+    def update_text_mode_ui(self, initializing: bool = False) -> None:
+        is_split_mode = self.text_mode_var.get() == "split"
+        if is_split_mode:
+            self.text_input.grid_forget()
+            for row_index, row_frame in enumerate(self.split_row_frames):
+                pady = (0, 6) if row_index == 0 else (0, 0)
+                row_frame.grid(row=row_index, column=0, sticky="ew", pady=pady)
+            self.text_mode_button.configure(text="Normal")
+        else:
+            for row_frame in self.split_row_frames:
+                row_frame.grid_forget()
+            self.text_input.grid(row=0, column=0, sticky="ew")
+            self.text_mode_button.configure(text="Split")
+
+        if not initializing:
+            self.on_settings_changed()
+
+    def toggle_text_mode(self) -> None:
+        new_mode = "split" if self.text_mode_var.get() == "normal" else "normal"
+        self.text_mode_var.set(new_mode)
+        self.update_text_mode_ui()
+        if self.source_image is not None:
+            if self.render_after_id is not None:
+                self.root.after_cancel(self.render_after_id)
+                self.render_after_id = None
+            self.render_now()
 
     def on_settings_changed(self, *_args) -> None:
         self.settings = self.get_current_settings()
         self.refresh_control_labels()
-        self.update_color_button()
+        self.update_color_buttons()
 
         try:
             self.write_settings(self.settings)
@@ -499,9 +1043,26 @@ class WatermarkApp:
         self.angle_label_var.set(f"Angle: {int(float(self.angle_var.get()))} deg")
         self.opacity_label_var.set(f"Opacity: {int(float(self.opacity_percent_var.get()))}%")
 
-    def update_color_button(self) -> None:
+    def update_color_buttons(self) -> None:
         color = self.color_var.get()
         self.color_button.configure(bg=color, activebackground=color, fg=self.pick_button_text_color(color))
+        border_color = self.border_color_var.get().strip()
+        if border_color:
+            self.border_color_button.configure(
+                bg=border_color,
+                activebackground=border_color,
+                fg=self.pick_button_text_color(border_color),
+                text="Border Enabled",
+            )
+            self.clear_border_button.state(["!disabled"])
+        else:
+            self.border_color_button.configure(
+                bg=self.root.cget("bg"),
+                activebackground=self.root.cget("bg"),
+                fg="#000000",
+                text="Choose Border Color",
+            )
+            self.clear_border_button.state(["disabled"])
 
     def add_footer_text(self, parent: ttk.Frame, text: str, column: int, row: int = 0) -> None:
         ttk.Label(parent, text=text).grid(row=row, column=column, sticky="e")
@@ -525,6 +1086,16 @@ class WatermarkApp:
         _, color = colorchooser.askcolor(color=self.color_var.get(), parent=self.root, title="Choose watermark color")
         if color:
             self.color_var.set(color)
+
+    def choose_border_color(self) -> None:
+        initial_color = self.border_color_var.get().strip() or self.color_var.get()
+        _, color = colorchooser.askcolor(color=initial_color, parent=self.root, title="Choose text border color")
+        if color:
+            self.border_color_var.set(color)
+
+    def clear_border_color(self) -> None:
+        if self.border_color_var.get():
+            self.border_color_var.set("")
 
     def open_image(self) -> None:
         file_path = filedialog.askopenfilename(title="Open Image", filetypes=IMAGE_FILE_TYPES)
@@ -599,14 +1170,14 @@ class WatermarkApp:
         scale = min(preview_width / source_width, preview_height / source_height, 1.0)
 
         if scale >= 1.0:
-            return self.source_image.copy(), self.settings.copy()
+            return self.source_image.copy(), self.get_render_settings()
 
         preview_size = (
             max(1, int(round(source_width * scale))),
             max(1, int(round(source_height * scale))),
         )
         preview_source = self.source_image.resize(preview_size, Image.Resampling.LANCZOS)
-        preview_settings = self.settings.copy()
+        preview_settings = self.get_render_settings()
         preview_settings["font_size"] = max(8, int(round(self.settings["font_size"] * scale)))
         preview_settings["space_left"] = int(round(self.settings["space_left"] * scale))
         preview_settings["space_right"] = int(round(self.settings["space_right"] * scale))
@@ -653,7 +1224,7 @@ class WatermarkApp:
             return
 
         output_path = Path(target)
-        image_to_save = render_watermark(self.source_image, self.settings)
+        image_to_save = render_watermark(self.source_image, self.get_render_settings())
 
         try:
             if output_path.suffix.lower() in {".jpg", ".jpeg"}:
